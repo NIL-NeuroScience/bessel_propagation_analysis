@@ -307,6 +307,9 @@ function menu_loaddata_Callback(hObject, eventdata, handles)
 global bess_beam_data
 [filename,pathname] = uigetfile({'*.tiff;*.tif'},'Load bessel beam data');
 [~,~,ext] = fileparts(filename);
+bess_beam_data.bess_filename = filename;
+bess_beam_data.bess_pathname = pathname;
+
 
 if  strcmp(ext,'.tiff') || strcmp(ext,'.tif')
     prompt = {'Enter number of channels: 2 or 4'};
@@ -613,6 +616,17 @@ function tools_plotintensitychanges_Callback(hObject, eventdata, handles)
 global bess_beam_data
 colors = {'r','g','b','c','m','y','w'};
 
+[p,f,e]=fileparts(bess_beam_data.bess_filename);
+
+if ~exist([bess_beam_data.bess_pathname 'Results'], 'dir')
+    mkdir([bess_beam_data.bess_pathname 'Results']);
+end
+
+if ~exist([bess_beam_data.bess_pathname 'Results' filesep f], 'dir')
+    mkdir([bess_beam_data.bess_pathname 'Results' filesep f]);
+end
+folder_to_save = [bess_beam_data.bess_pathname 'Results' filesep f];
+
 % determine if stimulus is applied during the experiment
 AirPuffMarker = bess_beam_data.analogInput.("AirPuff Marker");
 AirPuffMarker(AirPuffMarker <3) = 0;
@@ -622,6 +636,14 @@ AirPuffMarker(AirPuffMarker<0) = 0;
 stim_idx = find(AirPuffMarker == 1);
 Time =  bess_beam_data.analogInput.("Time");
 time_num = time2num(Time,"Seconds");
+% determine acquisition starting time respective to trigger time
+galvoY = bess_beam_data.analogInput.("galvoY");
+galvoY_min = min(galvoY);
+galvoY_max = max(galvoY);
+threshold = (galvoY_min+galvoY_max)/2;
+idx = find(galvoY>threshold);
+acq_start_time = time_num(idx(1));
+[~,end_idx] = min(abs(time_num-(bess_beam_data.timg(end)+acq_start_time)));
 if ~isempty(stim_idx)
     for u=1:length(stim_idx)
         idx1 = stim_idx(u);
@@ -632,17 +654,35 @@ if ~isempty(stim_idx)
     % get one idx for each stimulus
     stim_idx_start = find(AirPuffMarker == 1);
     
-    % determine acquisition starting time respective to trigger time
-    galvoY = bess_beam_data.analogInput.("galvoY");
-    galvoY_min = min(galvoY);
-    galvoY_max = max(galvoY);
-    threshold = (galvoY_min+galvoY_max)/2;
-    idx = find(galvoY>threshold);
-    acq_start_time = time_num(idx(1));
+    
     
     % stimulus time with respective to image acquisition time
     stim_time = time_num(stim_idx_start)-acq_start_time;
 end
+
+% read accelarometer data and plot
+accY = bess_beam_data.analogInput.("Accelerometer_Y");
+accX = bess_beam_data.analogInput.("Accelerometer_X");
+accZ = bess_beam_data.analogInput.("Accelerometer_Z");
+
+figure; plot(time_num(idx(1):end_idx)-acq_start_time,accX(idx(1):end_idx));
+xlabel( 'time(sec)')
+ylabel( 'a.u.')
+title('Accelerometer X');
+save_fig(gcf, 'acc_X', folder_to_save);
+
+figure; plot(time_num(idx(1):end_idx)-acq_start_time,accY(idx(1):end_idx));
+xlabel( 'time(sec)')
+ylabel( 'a.u.')
+title('Accelerometer Y');
+save_fig(gcf, 'acc_y', folder_to_save);
+
+figure; plot(time_num(idx(1):end_idx)-acq_start_time,accZ(idx(1):end_idx));
+xlabel( 'time(sec)')
+ylabel( 'a.u.')
+title('Accelerometer Z');
+save_fig(gcf, 'acc_z', folder_to_save);
+
 
 if isfield(bess_beam_data,'ch1_ROIs')
     if length(bess_beam_data.ch1_ROIs) >=1
@@ -653,14 +693,18 @@ if isfield(bess_beam_data,'ch1_ROIs')
             for v = 1:size(ch1_data,3)
                 ch1_data(:,:,v) = ch1_data(:,:,v).*bess_beam_data.ch1_ROIs{u}.mask.*(1-bess_beam_data.vessel_seg);
             end
-            ROI_mean = squeeze(sum(sum(ch1_data,1),2))/sum(bess_beam_data.ch1_ROIs{u}.mask(:));
+            ROI_mean = squeeze(sum(sum(ch1_data,1),2))/sum(sum(bess_beam_data.ch1_ROIs{u}.mask.*(1-bess_beam_data.vessel_seg)));
             ROI_mean_sort = sort(ROI_mean);
             ROI_baseline = mean(ROI_mean_sort(round(n_points/2-(n_points*5/100)):round(n_points/2+(n_points*5/100))));
             ch1_deltaFbyF(u,:) = (ROI_mean-ROI_baseline)/ROI_baseline;
         end
-        img2 = mean(bess_beam_data.ch1_data,3);
         Ch1min = str2num(get(handles.Ch1min,'string'));
         Ch1max = str2num(get(handles.Ch1max,'string'));
+        Ch1frame = str2num(get(handles.Ch1frame,'string'));
+        img2 = bess_beam_data.ch1_data(:,:,Ch1frame);
+        if isfield(bess_beam_data,'vessel_seg')
+             img2 = img2.*(1-bess_beam_data.vessel_seg);
+        end
         figure;
         imagesc(img2,[Ch1min Ch1max]);
         colormap('gray')
@@ -675,6 +719,8 @@ if isfield(bess_beam_data,'ch1_ROIs')
             end
         end
         hold off
+        title('Ca image with ROIS');
+        save_fig(gcf, 'ca_image_rois', folder_to_save);
         figure;
         hold on;
         legend_labels= [];
@@ -684,6 +730,9 @@ if isfield(bess_beam_data,'ch1_ROIs')
         end
         if ~isempty(stim_time)
             for u = 1:length(stim_time)
+                if stim_time(u)>bess_beam_data.timg(end)
+                    break;
+                end
                 xline(stim_time(u));
             end
         end
@@ -691,6 +740,8 @@ if isfield(bess_beam_data,'ch1_ROIs')
         hold off;  
         ylabel('\DeltaI/I')
         xlabel('t(sec)')
+        title(['Ca activity [' num2str(Ch1min) ' ' num2str(num2str(Ch1max)) ']']);
+        save_fig(gcf, 'ca_activity', folder_to_save);
     end
 end
 if isfield(bess_beam_data,'ch2_ROIs')
@@ -719,11 +770,13 @@ if isfield(bess_beam_data,'ch2_ROIs')
             for u = 1:length(bess_beam_data.ch2_ROIs)
                 color_idx = min(u,length(colors));
                 h = plot(bess_beam_data.ch2_ROIs{u}.Xi,bess_beam_data.ch2_ROIs{u}.Yi,'LineWidth',2,'color',colors{color_idx});
-                 text(mean(bess_beam_data.ch1_ROIs{u}.Xi),mean(bess_beam_data.ch1_ROIs{u}.Yi),num2str(u),'color',colors{color_idx})
+                 text(mean(bess_beam_data.ch2_ROIs{u}.Xi),mean(bess_beam_data.ch2_ROIs{u}.Yi),num2str(u),'color',colors{color_idx})
 %                 set(h,'ButtonDownFcn', sprintf('delete_ch2_roi(%d)',u) );
             end
 
         end
+        title('Vessel image with ROIS');
+        save_fig(gcf, 'vess_image_rois', folder_to_save);
         
         hold off
         figure;
@@ -735,6 +788,9 @@ if isfield(bess_beam_data,'ch2_ROIs')
         end
         if ~isempty(stim_time)
             for u = 1:length(stim_time)
+                if stim_time(u)>bess_beam_data.timg(end)
+                    break;
+                end
                 xline(stim_time(u));
             end
         end
@@ -742,6 +798,8 @@ if isfield(bess_beam_data,'ch2_ROIs')
         hold off;
         ylabel('\DeltaI/I')
         xlabel('t(sec)')
+        title('Vessel activity');
+        save_fig(gcf, 'vess_activity', folder_to_save);
     end
 end
 
@@ -775,11 +833,16 @@ if ~isempty(stim_idx)
     if isfield(bess_beam_data,'ch1_ROIs')
         if length(bess_beam_data.ch1_ROIs) >=1
             ch1_deltaFbyF_avg = zeros(length(bess_beam_data.ch1_ROIs), avg_npoints);
+            n_avg = 0;
             for v =1:length(stim_time)
                 [~,time_idx] = min(abs(bess_beam_data.timg-stim_time(v)));
+                if time_idx+points_after > size(ch1_deltaFbyF,2)
+                    break
+                end
                 ch1_deltaFbyF_avg = ch1_deltaFbyF_avg+ch1_deltaFbyF(:,time_idx-points_before:time_idx+points_after);
+                n_avg = n_avg+1;
             end
-            ch1_deltaFbyF_avg = ch1_deltaFbyF_avg/length(stim_time);
+            ch1_deltaFbyF_avg = ch1_deltaFbyF_avg/n_avg;
             figure;
             hold on;
             for w = 1:length(bess_beam_data.ch1_ROIs)
@@ -788,16 +851,23 @@ if ~isempty(stim_idx)
             hold off;
             ylabel('\DeltaI/I')
             xlabel('t(sec)')
+            title('Average calcium activity');
+            save_fig(gcf, 'avg_ca_activity', folder_to_save);
         end
     end
     if isfield(bess_beam_data,'ch2_ROIs')
         if length(bess_beam_data.ch2_ROIs) >=1
             ch2_deltaFbyF_avg = zeros(length(bess_beam_data.ch2_ROIs), avg_npoints);
+            n_avg = 0;
             for v =1:length(stim_time)
                 [~,time_idx] = min(abs(bess_beam_data.timg-stim_time(v)));
+                if time_idx+points_after > size(ch2_deltaFbyF,2)
+                    break
+                end
                 ch2_deltaFbyF_avg = ch2_deltaFbyF_avg+ch2_deltaFbyF(:,time_idx-points_before:time_idx+points_after);
+                n_avg = n_avg+1;
             end
-            ch2_deltaFbyF_avg = ch2_deltaFbyF_avg/length(stim_time);
+            ch2_deltaFbyF_avg = ch2_deltaFbyF_avg/n_avg;
             figure;
             hold on;
             for w = 1:length(bess_beam_data.ch2_ROIs)
@@ -806,8 +876,14 @@ if ~isempty(stim_idx)
             hold off;
             ylabel('\DeltaI/I')
             xlabel('t(sec)')
+            title('Average vessel activity');
+            save_fig(gcf, 'avg_vess_activity', folder_to_save);
         end
     end
 end
+
+function save_fig(h, filename, path)
+    saveas(h,[path filesep filename '.png'])
+    saveas(h,[path filesep filename '.fig'])
 
 
